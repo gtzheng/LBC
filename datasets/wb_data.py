@@ -72,44 +72,8 @@ class WaterBirdsDataset(Dataset):
     def get_group(self, idx):
         y = self.y_array[idx]
         g = (self.embeddings[idx] == 1) * self.n_classes + y
-        # if self.concepts is None:
-        #     return -1
-        # y = self.y_array[idx]
-        # if self.embeddings[idx, self.concepts].sum() == 1:
-        #     g = y * len(self.concepts) + np.argmax(self.embeddings[idx, self.concepts])
-        # else:
-        #     g = -1
         return g
 
-    def sel_concepts(self):
-        sel_concepts = []
-        num_samples, num_attrs = self.embeddings.shape
-        scores = []
-        for i in tqdm(range(num_attrs - 1)):
-            for j in range(i + 1, num_attrs):
-                counts = self.embeddings[:, i] + self.embeddings[:, j]
-                indexes = np.arange(num_samples)[counts == 1]
-                num_i = [
-                    self.embeddings[indexes][:, i][self.y_array[indexes] == l].sum()
-                    for l in range(self.n_classes)
-                ]
-                num_j = [
-                    self.embeddings[indexes][:, j][self.y_array[indexes] == l].sum()
-                    for l in range(self.n_classes)
-                ]
-                nums = np.array(num_i + num_j)
-                if nums.min() < 100:
-                    continue
-                num_i = np.array(num_i)
-                num_j = np.array(num_j)
-                prob_i = num_i / num_i.sum()
-                ent_i = (-prob_i * np.log(prob_i + 1e-10)).sum()
-                prob_j = num_j / num_j.sum()
-                # ent_j = (-prob_j*np.log(prob_j+1e-10)).sum()
-                dist = np.linalg.norm(num_i - num_j, 2.0)
-                scores.append(((i, j), ent_i * dist))
-        scores = sorted(scores, key=lambda x: x[1])
-        return np.array(scores[0][0])
 
     def __getitem__(self, idx):
         y = self.y_array[idx]
@@ -118,20 +82,10 @@ class WaterBirdsDataset(Dataset):
 
         img_path = os.path.join(self.basedir, self.filename_array[idx])
         img = Image.open(img_path).convert("RGB")
-        # img = read_image(img_path)
-        # img = img.float() / 255.
-
+       
         if self.transform:
             img = self.transform(img)
 
-        # if self.segmask:
-        #     img_path = os.path.join(
-        #         self.segmask, self.filename_array[idx].replace(".jpg", ".png")
-        #     )
-        #     seg = Image.open(img_path).convert("RGB")
-        #     seg = self.transform(seg)
-        #     return img, y, g, p, seg
-        # else:
         if self.embeddings is None:
             return img, y, g, p
         else:

@@ -46,7 +46,7 @@ class VITGPT2_CAPTIONING:
                 msgs.append(f"{image_names[i]},{preds[i].strip()}")
         return msgs
 
-    def get_img_captions(self, img_folder, csv_path, path_pos=0, batch_size=256):
+    def get_img_captions(self, img_folder, csv_path, path_pos=0, label_pos=1, batch_size=256):
         if not os.path.exists(csv_path):
             raise ValueError(f"{csv_path} does not exist")
         lines = [x.strip() for x in open(csv_path, "r").readlines()][1:]
@@ -63,7 +63,7 @@ class VITGPT2_CAPTIONING:
             while count < len(lines):
                 sel = lines[count:min(count+batch_size,len(lines))]
                 paths = [os.path.join(img_folder, s.split(',')[path_pos]) for s in sel]
-                labels = [s.split(',')[1].strip() for s in sel]
+                labels = [s.split(',')[label_pos].strip() for s in sel]
                 msgs = self.predict_step(paths)
                 write_info = '\n'.join([f"{msgs[i]},{labels[i]}" for i in range(len(msgs))])
                 fout.write(f"{write_info}\n")
@@ -110,7 +110,7 @@ class BLIP_CAPTIONING:
                 msgs.append(f"{image_names[i]},{preds[i].strip()}")
         return msgs
 
-    def get_img_captions(self, img_folder, csv_path, path_pos=0, batch_size=256):
+    def get_img_captions(self, img_folder, csv_path, path_pos=0, label_pos=1, batch_size=256):
         if not os.path.exists(csv_path):
             raise ValueError(f"{csv_path} does not exist")
         lines = [x.strip() for x in open(csv_path, "r").readlines()][1:]
@@ -127,7 +127,7 @@ class BLIP_CAPTIONING:
             while count < len(lines):
                 sel = lines[count:min(count + batch_size, len(lines))]
                 paths = [os.path.join(img_folder, s.split(',')[path_pos]) for s in sel]
-                labels = [s.split(',')[1].strip() for s in sel]
+                labels = [s.split(',')[label_pos].strip() for s in sel]
                 msgs = self.predict_step(paths)
                 write_info = '\n'.join([f"{msgs[i]},{labels[i]}" for i in range(len(msgs))])
                 fout.write(f"{write_info}\n")

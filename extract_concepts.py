@@ -77,6 +77,7 @@ def extract_concepts(nlp, texts):
 
 
 def get_concept_embeddings(path, threshold=10):
+    caption_model = path.split("/")[-1].split('_')[0]
     count = 0
     with open(path, "rb") as f:
         concept_arr = pickle.load(f)
@@ -96,7 +97,7 @@ def get_concept_embeddings(path, threshold=10):
     vocab_size = len(vocab)
     print(f"vocab size is {vocab_size}|({len(concepts)}) ({vocab_size/len(concepts):.2f})")
     save_path = "/".join(path.split("/")[0:-1])
-    save_path = os.path.join(save_path, f"vocab_thre{threshold}_{vocab_size}.pickle")
+    save_path = os.path.join(save_path, f"{caption_model}_vocab_thre{threshold}_{vocab_size}.pickle")
     with open(save_path, "wb") as outfile:
         pickle.dump(vocab, outfile)
     concept2idx = {v:i for i,v in enumerate(vocab)}
@@ -107,12 +108,17 @@ def get_concept_embeddings(path, threshold=10):
             if c in concept2idx:
                 concept_embeds[idx, concept2idx[c]] = 1
     save_path = "/".join(path.split("/")[0:-1])
-    save_path = os.path.join(save_path, f"img_embeddings_thre{threshold}_vocab{vocab_size}.pickle")
+    save_path = os.path.join(save_path, f"{caption_model}_img_embeddings_thre{threshold}_vocab{vocab_size}.pickle")
     with open(save_path, "wb") as outfile:
         pickle.dump(concept_embeds, outfile)
  
              
 def get_concepts(caption_path, splits=0, split_idx=0):
+    save_path = "/".join(caption_path.split("/")[0:-1])
+    caption_model = caption_path.split("/")[-1].split('_')[0]
+    save_path = os.path.join(save_path, f"{caption_model}_extracted_concepts_{split_idx}_{splits}.pickle")
+    if os.path.exists(save_path):
+        return save_path
     nlp = spacy.load("en_core_web_trf")
     words_list = []
     with open(caption_path, "r") as f:
@@ -143,10 +149,10 @@ def get_concepts(caption_path, splits=0, split_idx=0):
         concepts = list(set(concepts))
         concepts_arr.append((eles[0],eles[1],concepts))
 
-    save_path = "/".join(caption_path.split("/")[0:-1])
-    save_path = os.path.join(save_path, f"extracted_concepts_{split_idx}_{splits}.pickle")
+    
     with open(save_path, "wb") as outfile:
         pickle.dump(concepts_arr, outfile)
+    return save_path
 
 def get_data_folder(dataset):
     if dataset == "waterbirds":
@@ -174,7 +180,13 @@ if __name__ == "__main__":
     
     data_folder, csv_path = get_data_folder(args.dataset)
     print(f"Process {args.dataset}")
-    caption_path = caption_model.get_img_captions(data_folder, csv_path, 1)
+    if args.dataset == "waterbirds":
+        path_pos = 1
+        label_pos = 2
+    elif args.dataset == "celeba":
+        path_pos = 2
+        label_pos = 3
+    caption_path = caption_model.get_img_captions(data_folder, csv_path, path_pos, label_pos)
    
     concept_path = get_concepts(caption_path)
     get_concept_embeddings(concept_path)
