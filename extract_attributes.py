@@ -9,9 +9,10 @@ import pickle
 import os
 import pandas as pd
 
-from img_captioning import VITGPT2_CAPTIONING, BLIP_CAPTIONING
+from img_captioning import VITGPT2_CAPTIONING
 import argparse
-      
+from config import *
+
 def to_singular(nlp, text):
     doc = nlp(text)
     if len(doc) == 1:
@@ -29,17 +30,10 @@ def get_adj_pairs(doc):
         for tok in chunk:
             if tok.pos_ == "ADJ":
                 adj.append(f"{tok.text}:adj")
-            # if tok.pos_ == "CCONJ":
-            #     split = True
+    
         for a in adj:
             adj_set.add(a)
-        # if len(adj) > 0:
-        #     if split:
-        #         for a in adj:
-        #             adj_set.add(a)  # e.g., black and white to [black, white]
-        #     else:
-        #         adj = " ".join(adj)  # combine adjectives, such as old fashioned
-        #         adj_set.add(adj)
+    
     return list(adj_set)
 
 
@@ -63,60 +57,60 @@ def get_nouns(nlp, doc):
     return nouns
 
 
-def extract_concepts(nlp, texts):
+def extract_attributes(nlp, texts):
     docs = nlp.pipe(texts)
-    concepts = []
+    attributes = []
     for doc in docs:
         adjs = get_adj_pairs(doc)
         nouns = get_nouns(nlp, doc)
         for a in adjs:
-            concepts.append(a)
+            attributes.append(a)
         for n in nouns:
-            concepts.append(n)
-    return concepts
+            attributes.append(n)
+    return attributes
 
 
-def get_concept_embeddings(path, threshold=10):
+def get_attribute_embeddings(path, threshold=10):
     caption_model = path.split("/")[-1].split('_')[0]
     count = 0
     with open(path, "rb") as f:
-        concept_arr = pickle.load(f)
-    concept_counts = {}
-    for concepts in tqdm(concept_arr, desc="count concepts"):
-        for c in concepts[2]:
-            if c in concept_counts:
-                concept_counts[c] += 1
+        attribute_arr = pickle.load(f)
+    attribute_counts = {}
+    for attributes in tqdm(attribute_arr, desc="count attributes"):
+        for c in attributes[2]:
+            if c in attribute_counts:
+                attribute_counts[c] += 1
             else:
-                concept_counts[c] = 1
-    concept_counts = [(k,v) for k,v in concept_counts.items()]
-    concept_counts = sorted(concept_counts, key=lambda x: -x[1])
-    concepts = np.array([t[0] for t in concept_counts])
-    counts = np.array([t[1] for t in concept_counts])
-    vocab = concepts[counts>threshold]
+                attribute_counts[c] = 1
+    attribute_counts = [(k,v) for k,v in attribute_counts.items()]
+    attribute_counts = sorted(attribute_counts, key=lambda x: -x[1])
+    attributes = np.array([t[0] for t in attribute_counts])
+    counts = np.array([t[1] for t in attribute_counts])
+    vocab = attributes[counts>threshold]
     
     vocab_size = len(vocab)
-    print(f"vocab size is {vocab_size}|({len(concepts)}) ({vocab_size/len(concepts):.2f})")
+    print(f"vocab size is {vocab_size}|({len(attributes)}) ({vocab_size/len(attributes):.2f})")
     save_path = "/".join(path.split("/")[0:-1])
     save_path = os.path.join(save_path, f"{caption_model}_vocab_thre{threshold}_{vocab_size}.pickle")
     with open(save_path, "wb") as outfile:
         pickle.dump(vocab, outfile)
-    concept2idx = {v:i for i,v in enumerate(vocab)}
+    attribute2idx = {v:i for i,v in enumerate(vocab)}
     
-    concept_embeds = np.zeros((len(concept_arr), vocab_size))
-    for idx,concepts in tqdm(enumerate(concept_arr), desc="Generate embeddings"):
-        for c in concepts[2]:
-            if c in concept2idx:
-                concept_embeds[idx, concept2idx[c]] = 1
+    attribute_embeds = np.zeros((len(attribute_arr), vocab_size))
+    for idx,attributes in tqdm(enumerate(attribute_arr), desc="Generate embeddings"):
+        for c in attributes[2]:
+            if c in attribute2idx:
+                attribute_embeds[idx, attribute2idx[c]] = 1
     save_path = "/".join(path.split("/")[0:-1])
     save_path = os.path.join(save_path, f"{caption_model}_img_embeddings_thre{threshold}_vocab{vocab_size}.pickle")
     with open(save_path, "wb") as outfile:
-        pickle.dump(concept_embeds, outfile)
+        pickle.dump(attribute_embeds, outfile)
  
              
-def get_concepts(caption_path, splits=0, split_idx=0):
+def get_attributes(caption_path, splits=0, split_idx=0):
     save_path = "/".join(caption_path.split("/")[0:-1])
     caption_model = caption_path.split("/")[-1].split('_')[0]
-    save_path = os.path.join(save_path, f"{caption_model}_extracted_concepts_{split_idx}_{splits}.pickle")
+    save_path = os.path.join(save_path, f"{caption_model}_extracted_attributes_{split_idx}_{splits}.pickle")
     if os.path.exists(save_path):
         return save_path
     nlp = spacy.load("en_core_web_trf")
@@ -142,28 +136,29 @@ def get_concepts(caption_path, splits=0, split_idx=0):
         start_idx = 0
         end_idx = num
     sel_words_list = words_list[start_idx:end_idx]
-    concepts_arr = []
+    attributes_arr = []
     
     for eles in tqdm(sel_words_list):
-        concepts = extract_concepts(nlp, [eles[2]])
-        concepts = list(set(concepts))
-        concepts_arr.append((eles[0],eles[1],concepts))
+        attributes = extract_attributes(nlp, [eles[2]])
+        attributes = list(set(attributes))
+        attributes_arr.append((eles[0],eles[1],attributes))
 
     
     with open(save_path, "wb") as outfile:
-        pickle.dump(concepts_arr, outfile)
+        pickle.dump(attributes_arr, outfile)
     return save_path
 
 def get_data_folder(dataset):
     if dataset == "waterbirds":
-        csv_path = "/bigtemp/gz5hp/dataset_hub/waterbird_complete95_forest2water2/metadata.csv"
-        img_path = "/bigtemp/gz5hp/dataset_hub/waterbird_complete95_forest2water2"
+        img_path = WATERBIRDS_DATA_FOLDER
     elif dataset ==  "celeba":
-        csv_path = "/bigtemp/gz5hp/dataset_hub/celebfaces/img_align_celeba/metadata.csv"
-        img_path = "/bigtemp/gz5hp/dataset_hub/celebfaces/img_align_celeba"
-    elif dataset == "metashift":
-        csv_path = "/bigtemp/gz5hp/dataset_hub/metashifts/MetaDatasetCatDog/metadata.csv"
-        img_path = "/bigtemp/gz5hp/dataset_hub/metashifts/MetaDatasetCatDog"
+        img_path = CELEBA_DATA_FOLDER
+    elif dataset == "nico":
+        img_path = NICO_DATA_FOLDER
+    elif dataset == "imagenet-9":
+        img_path = IMAGENET9_DATA_FOLDER
+
+    csv_path = os.path.join(img_path, "metadata.csv")
     return img_path, csv_path
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -173,8 +168,6 @@ if __name__ == "__main__":
     
     if args.model == "vit-gpt2":
         caption_model = VITGPT2_CAPTIONING()
-    elif args.model == "blip":
-        caption_model = BLIP_CAPTIONING()
     else:
         raise ValueError(f"Captioning model {args.model} not supported")
     
@@ -186,9 +179,15 @@ if __name__ == "__main__":
     elif args.dataset == "celeba":
         path_pos = 2
         label_pos = 3
+    elif args.dataset == "nico":
+        path_pos = 1
+        label_pos = 2
+    elif args.dataset == "imagenet-9":
+        path_pos = 1
+        label_pos = 2
     caption_path = caption_model.get_img_captions(data_folder, csv_path, path_pos, label_pos)
    
-    concept_path = get_concepts(caption_path)
-    get_concept_embeddings(concept_path)
+    attribute_path = get_attributes(caption_path)
+    get_attribute_embeddings(attribute_path, threshold=10)
     
     

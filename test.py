@@ -1,9 +1,7 @@
 import torchvision
 import torch
+import torch.nn as nn
 import numpy as np
-# from pytorch_grad_cam import XGradCAM
-# from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
-# from pytorch_grad_cam.utils.image import show_cam_on_image
 from torch.utils.data import DataLoader, RandomSampler
 import matplotlib.pyplot as plt
 import cv2
@@ -11,25 +9,14 @@ import pandas as pd
 from PIL import Image
 import logging
 import os
-
+import argparse
 import copy
+from models.resnet import resnet18, resnet50
+from utils import set_gpu, get_free_gpu
+from datasets.data_utils import get_dataloader
 
 
-
-def set_gpu(gpu):
-    print("set gpu:", gpu)
-    os.environ["CUDA_VISIBLE_DEVICES"] = gpu
-
-
-def get_freer_gpu():
-    os.system("nvidia-smi -q -d Memory |grep -A4 GPU|grep Used >tmp")
-    memory_available = np.array(
-        [int(x.split()[2]) for x in open("tmp", "r").readlines()]
-    )
-    return np.argsort(memory_available)
-
-
-def test_model(model, loader):
+def test_model(model, loader, conflicting_groups=None):
     count = 0
     acc = 0
     model.eval()
@@ -46,61 +33,227 @@ def test_model(model, loader):
             res.append(pred)
             groups.append(g.detach().cpu().numpy())
     res = np.concatenate(res)
-    groups = np.concatenate(groups)
     avg_acc = res.sum() / len(res)
-    acc_group = []
-    group_num = []
-    for g in np.unique(groups):
-        gres = res[groups == g]
-        acc_group.append(gres.sum() / len(gres))
-        group_num.append(len(gres))
-    acc_group = np.array(acc_group)
-    worst_acc = acc_group.min()
-    return avg_acc, worst_acc, acc_group
+
+    groups = np.concatenate(groups, axis=0)
+    if groups.ndim == 1:
+        num_group_types = 1
+        groups = groups.reshape(-1, 1)
+    else:
+        num_group_types = groups.shape[1]
+    unbiased_acc_avg = 0
+    worst_acc_avg = 0
+
+    for g_id in range(num_group_types):
+        acc_group = []
+        group_num = []
+
+        unique_groups = np.unique(groups[:, g_id])
+        group2idx = {g: i for i, g in enumerate(unique_groups)}
+        for g in unique_groups:
+            gres = res[groups[:, g_id] == g]
+            if len(gres) < 10:
+                continue
+            acc_group.append(gres.sum() / len(gres))
+            group_num.append(len(gres))
+        acc_group = np.array(acc_group)
+        unbiased_acc_avg += acc_group.mean()
+        worst_acc_avg += acc_group.min()
+       
+    unbiased_acc_avg /= num_group_types
+    worst_acc_avg /= num_group_types
+    return avg_acc, unbiased_acc_avg, worst_acc_avg
 
 
-def load_model(n_classes: int, ckpt_path: str) -> torchvision.models.resnet.ResNet:
-    # model = torchvision.models.resnet50(weights=None)
-    # d = model.fc.in_features
-    # model.fc = torch.nn.Linear(d, n_classes)
+def test_model_pseudo(model, loader, num_threshold=20):
+    count = 0
+    acc = 0
+    model.eval()
+    res = []
+    groups_psu = []
+    with torch.no_grad():
+        for x, y, _, p, g_arr in loader:
+            x, y = (
+                x.cuda(),
+                y.cuda(),
+            )
+            out = model(x)
+            pred = (torch.argmax(out, dim=-1) == y).detach().cpu().numpy()
+            res.append(pred)
+            groups_psu.append(g_arr.detach().cpu().numpy())
+    groups_psu = np.concatenate(groups_psu)
+    res = np.concatenate(res)
+
+    attr_worst_acc = []
+    attr_avg_acc = []
+    for a in range(groups_psu.shape[1]):
+        acc_group = []
+        group_num = []
+        groups = groups_psu[:, a]
+        uni_groups = np.unique(groups)
+        n_groups = len(uni_groups)
+        for g in range(n_groups//2, n_groups):  # select the group that has the attribute
+            gres = res[groups == g]
+            if len(gres) > num_threshold:
+                acc_group.append(gres.sum() / len(gres))
+                group_num.append(len(gres))
+        if len(acc_group) > 0:
+            acc_group = np.array(acc_group)
+            worst_acc_psu = acc_group.min()
+            attr_worst_acc.append(worst_acc_psu)
+            attr_avg_acc.append(acc_group)
+    attr_worst_acc = np.array(attr_worst_acc)
+    attr_avg_acc = np.concatenate(attr_avg_acc)
+    avg_acc = res.sum() / len(res)
+
+    return avg_acc, attr_worst_acc.min(), attr_avg_acc.mean()
+
+
+def load_model(ckpt_path: str) -> torchvision.models.resnet.ResNet:
+
     model = torch.load(ckpt_path)
     model.cuda()
     model.eval()
     return model
 
 
+class LBC(nn.Module):
+    def __init__(self, backbone, num_classes, n_clusters=2, pretrained=True):
+        super(LBC, self).__init__()
+        if backbone == "resnet50":
+            if pretrained:
+                self.backbone = resnet50()
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+            else:
+                self.backbone = resnet50()
+        elif backbone == "resnet18":
+            if pretrained:
+                self.backbone = resnet18()
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+            else:
+                self.backbone = resnet18()
+        d = self.backbone.out_dim
 
-# if __name__ == '__main__':
-#     test_transform = get_transform_cub(
-#         target_resolution=(224, 224), train=False, augment_data=False
-#     )
-#     testset = WaterBirdsDataset(
-#         basedir="/bigtemp/gz5hp/dataset_hub/waterbird_complete95_forest2water2",
-#         split="test",
-#         transform=test_transform,
-#         segmask="/bigtemp/gz5hp/dataset_hub/cub200_2011/CUB_200_2011/segmentations",
-#     )
+        self.classifier = nn.Linear(d, num_classes*n_clusters)
+        self.num_classes = num_classes
+        self.fea_dim = d
+        self.fc = nn.Linear(d, num_classes)
+        self.K = n_clusters
 
-#     loader_kwargs = {
-#         "batch_size": 100,
-#         "num_workers": 4,
-#         "pin_memory": True,
-#         "reweight_places": None,
-#     }
+    def normal_forward(self, x):
+        fea = self.backbone(x)
+        logits = self.fc(fea)
+        return logits
 
-#     test_loader = get_loader(
-#         testset,
-#         train=False,
-#         reweight_groups=None,
-#         reweight_classes=None,
-#         **loader_kwargs,
-#     )
+    def forward(self, x, pred=False):
+        fea = self.backbone(x)
+        logits = self.classifier(fea)
+        if self.classifier.training:
+            if pred:
+                preds = torch.argmax(logits, dim=1)
+                preds = preds // self.K
+                return logits, preds
+            else:
+                return logits
+        else:
+            class_logits = torch.max(
+                logits.reshape(-1, self.num_classes, self.K), dim=-1)[0]
+            return class_logits
 
 
-#     gpu = ",".join([str(i) for i in get_freer_gpu()[0:1]])
-#     set_gpu(gpu)
+class ERMModel(nn.Module):
+    def __init__(self, backbone, num_classes, pretrained=True):
+        super(ERMModel, self).__init__()
+        if backbone == "resnet50":
+            if pretrained:
+                self.backbone = resnet50()
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+            else:
+                self.backbone = resnet50()
+        elif backbone == "resnet18":
+            if pretrained:
+                self.backbone = resnet18()
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+            else:
+                self.backbone = resnet18()
+        d = self.backbone.out_dim
 
-#     model_path = "/bigtemp/gz5hp/spurious_correlations/mask_expr/model_gval_npc3.pt"
-#     model = load_model(2, model_path)
-#     avg_acc, worst_acc = test_model(model, test_loader)
-#     print(f"Avg acc: {avg_acc:.4f}, worst acc: {worst_acc:.4f}")
+        self.num_classes = num_classes
+        self.fea_dim = d
+        self.fc = nn.Linear(d, num_classes)
+
+    def forward(self, x):
+        fea = self.backbone(x)
+        logits = self.fc(fea)
+        return logits
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="lbc test")
+
+    parser.add_argument(
+        "--dataset",
+        default="waterbirds",
+        type=str,
+        help="select dataset",
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        default=128,
+        type=int,
+        help="batch size",
+    )
+    parser.add_argument(
+        "--model_type",
+        default="",
+        type=str,
+        help="model path",
+    )
+    parser.add_argument(
+        "--backbone",
+        default="resnet50",
+        type=str,
+        help="model path",
+    )
+    parser.add_argument(
+        "--model_path",
+        default="",
+        type=str,
+        help="model path",
+    )
+    parser.add_argument(
+        "--n_clusters",
+        default=3,
+        type=int,
+        help="number of clusters",
+    )
+    args = parser.parse_args()
+    train_loader, idx_train_loader, val_loader, test_loader = get_dataloader(
+        args.dataset, args.batch_size)
+    if args.dataset == "waterbirds":
+        num_classes = 2
+    elif args.dataset == "celeba":
+        num_classes = 2
+    elif args.dataset == "nico":
+        num_classes = 10
+    elif args.dataset == "imagenet-9":
+        num_classes = 9
+    if args.model_type == "erm":
+        model = ERMModel(args.backbone, num_classes)
+    elif args.model_type == "lbc":
+        model = LBC(args.backbone, num_classes, args.n_clusters)
+    gpu = ",".join([str(i) for i in get_free_gpu()[0:1]])
+    set_gpu(gpu)
+    model_dict = torch.load(args.model_path)
+    model.load_state_dict(model_dict, strict=False)
+    model.backbone.load_state_dict(model_dict, strict=False)
+   
+    model.cuda()
+    avg_acc, unbiased_acc, worst_acc = test_model(model, test_loader)
+    print(
+        f"Avg acc: {avg_acc:.6f}, unbiased_acc {unbiased_acc:.6f}, worst acc: {worst_acc:.6f}")

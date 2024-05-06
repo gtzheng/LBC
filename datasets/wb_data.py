@@ -9,9 +9,13 @@ from torch.utils.data.sampler import WeightedRandomSampler
 import pickle
 from tqdm import tqdm
 
+# https://nlp.stanford.edu/data/dro/waterbird_complete95_forest2water2.tar.gz
+# https://www.kaggle.com/datasets/jessicali9530/celeba-dataset
+# celeba_metadata: https://github.com/PolinaKirichenko/deep_feature_reweighting
 
-class WaterBirdsDataset(Dataset):
-    def __init__(self, basedir, split="train", transform=None, concept_embed=None):
+
+class BiasedDataset(Dataset):
+    def __init__(self, basedir, split="train", transform=None, attribute_embed=None):
         try:
             split_i = ["train", "val", "test"].index(split)
         except ValueError:
@@ -49,22 +53,18 @@ class WaterBirdsDataset(Dataset):
             .float()
         )
         self.p_counts = (
-            (torch.arange(self.n_places).unsqueeze(1) == torch.from_numpy(self.p_array))
+            (torch.arange(self.n_places).unsqueeze(
+                1) == torch.from_numpy(self.p_array))
             .sum(1)
             .float()
         )
         self.filename_array = self.metadata_df["img_filename"].values
-        if concept_embed and os.path.exists(concept_embed):
-            with open(concept_embed, "rb") as f:
+        if attribute_embed and os.path.exists(attribute_embed):
+            with open(attribute_embed, "rb") as f:
                 self.embeddings = pickle.load(f)
             self.embeddings = self.embeddings[split_info == split_i]
-            # if split == "val":
-            #     self.concepts = self.sel_concepts()
-            # else:
-            #     self.concepts = None
         else:
             self.embeddings = None
-            self.concepts = None
 
     def __len__(self):
         return len(self.filename_array)
@@ -74,7 +74,6 @@ class WaterBirdsDataset(Dataset):
         g = (self.embeddings[idx] == 1) * self.n_classes + y
         return g
 
-
     def __getitem__(self, idx):
         y = self.y_array[idx]
         g = self.group_array[idx]
@@ -82,14 +81,15 @@ class WaterBirdsDataset(Dataset):
 
         img_path = os.path.join(self.basedir, self.filename_array[idx])
         img = Image.open(img_path).convert("RGB")
-       
+
         if self.transform:
             img = self.transform(img)
 
         if self.embeddings is None:
-            return img, y, g, p
+            return img, y, g, p, p
         else:
-            return img, y, g, p, self.get_group(idx)
+            attributes = self.embeddings[idx].astype(float)
+            return img, y, g, attributes, self.get_group(idx)
 
 
 def get_transform_cub(target_resolution, train, augment_data):
@@ -107,7 +107,8 @@ def get_transform_cub(target_resolution, train, augment_data):
                 ),
                 transforms.CenterCrop(target_resolution),
                 transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [
+                                     0.229, 0.224, 0.225]),
             ]
         )
     else:
@@ -121,7 +122,8 @@ def get_transform_cub(target_resolution, train, augment_data):
                 ),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [
+                                     0.229, 0.224, 0.225]),
             ]
         )
     return transform
@@ -168,9 +170,7 @@ def get_loader(
 
 def log_data(logger, train_data, test_data, val_data=None, get_yp_func=None):
     logger.write(f"Training Data (total {len(train_data)})\n")
-    # group_id = y_id * n_places + place_id
-    # y_id = group_id // n_places
-    # place_id = group_id % n_places
+
     for group_idx in range(train_data.n_groups):
         y_idx, p_idx = get_yp_func(group_idx)
         logger.write(
