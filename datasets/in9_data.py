@@ -3,6 +3,7 @@ import os
 import torch
 import numpy as np
 import pandas as pd
+import torchvision
 import torchvision.transforms as transforms
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
@@ -13,6 +14,7 @@ import warnings
 
 from torchvision.datasets import ImageFolder
 
+# Command to download the ImageNet dataset
 # wget https://image-net.org/data/ILSVRC/2012/ILSVRC2012_img_train.tar --no-check-certificate
 # wget https://image-net.org/data/ILSVRC/2012/ILSVRC2012_img_val.tar --no-check-certificate
 # reference to https://github.com/clovaai/rebias/blob/master/datasets/imagenet.py
@@ -76,11 +78,26 @@ CLASS_TO_INDEX = {
 }
 
 
-def is_image_file(filename):
+def is_image_file(filename: str):
+    """
+    Determine whether the given filename is an image
+    """
     return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 
 
-def collect_dataset_info(dir, class_to_idx, data="ImageNet"):
+def collect_dataset_info(
+    dir: str, class_to_idx: dict[str, int], dataset: str = "ImageNet-9"
+):
+    """Get image filenames and the mapping from class names to integers for ImageNet-9 or ImageNet-A
+
+    Args:
+        dir (str): path to the dataset folder
+        class_to_idx (dict[str, int]): a dictionary that maps class names to integers
+        dataset (str, optional): choose from {ImageNet, ImageNet-A}
+
+    Returns:
+        Tuple[List[str], Dict[str, int]]: a list of image filenames and an updated dictionary containing the mapping from class names to integers.
+    """
     # dog, cat, frog, turtle, bird, monkey, fish, crab, insect
     RESTRICTED_RANGES = [
         (151, 254),
@@ -96,13 +113,13 @@ def collect_dataset_info(dir, class_to_idx, data="ImageNet"):
     range_sets = [set(range(s, e + 1)) for s, e in RESTRICTED_RANGES]
     class_to_idx_ = {}
 
-    if data == "ImageNet-A":
+    if dataset == "ImageNet-A":
         for class_name, idx in class_to_idx.items():
             try:
                 class_to_idx_[class_name] = CLASS_TO_INDEX[class_name]
             except Exception:
                 pass
-    elif data == "ImageNet":  # ImageNet
+    elif dataset == "ImageNet-9":  # ImageNet
         for class_name, idx in class_to_idx.items():
             for new_idx, range_set in enumerate(range_sets):
                 if idx in range_set:
@@ -127,22 +144,38 @@ def collect_dataset_info(dir, class_to_idx, data="ImageNet"):
         for root, _, fnames in sorted(os.walk(d)):
             for fname in fnames:
                 if is_image_file(fname):
-                    item = (os.path.join(target, fname),
-                            target, class_to_idx_[target])
+                    item = (os.path.join(target, fname), target, class_to_idx_[target])
                     images.append(item)
 
     return images, class_to_idx_
 
 
-def find_classes(dir):
-    classes = [d for d in os.listdir(
-        dir) if os.path.isdir(os.path.join(dir, d))]
+def find_classes(folder: str):
+    """Get all the class names from the give folder
+
+    Args:
+        folder (str): path to an image folder
+
+    Returns:
+        Tuple[List[str], Dict[str, int]]: a list of class names and a dictionary containing the mapping from class names to integers
+    """
+    classes = [d for d in os.listdir(folder) if os.path.isdir(os.path.join(folder, d))]
     classes.sort()
     class_to_idx = {classes[i]: i for i in range(len(classes))}
     return classes, class_to_idx
 
 
-def prepare_imagenet9_metadata(base_dir):
+def prepare_imagenet9_metadata(base_dir: str):
+    """Create the metadata for the ImageNet-9 dataset and store the results into base_dir/metadata.csv
+    The first row is the header: img_id,img_filename,y,label_name,split
+    After the header, each row in metadata.csv contains image_id, img_filename, label_id, label_name, and split_id (0 for train and 1 for val)
+
+    Args:
+        base_dir (str): the path to the ImageNet dataset (ImageNet-9 is created from ImageNet)
+
+    Returns:
+        int: total number of images processed
+    """
     with open(os.path.join(base_dir, "metadata.csv"), "w") as f:
         f.write("img_id,img_filename,y,label_name,split\n")
         image_id = 0
@@ -150,7 +183,8 @@ def prepare_imagenet9_metadata(base_dir):
             data_root = os.path.join(base_dir, split)
             classes, class_to_idx = find_classes(data_root)
             image_info, _ = collect_dataset_info(
-                data_root, class_to_idx, data="ImageNet")
+                data_root, class_to_idx, dataset="ImageNet-9"
+            )
 
             for idx, info in enumerate(image_info):
                 path, target, class_id = info
@@ -160,14 +194,25 @@ def prepare_imagenet9_metadata(base_dir):
     return image_id
 
 
-def prepare_imageneta_metadata(data_root):
-    with open(os.path.join(data_root, "metadata.csv"), "w") as f:
+def prepare_imageneta_metadata(base_dir: str):
+    """Create the metadata for the ImageNet-A dataset and store the results into base_dir/metadata.csv
+    The first row is the header: img_id,img_filename,y,label_name,split
+    After the header, each row in metadata.csv contains image_id, img_filename, label_id, label_name, and split_id (0 for train and 1 for val)
+
+    Args:
+        base_dir (str): the path to the ImageNet dataset (ImageNet-9 is created from ImageNet)
+
+    Returns:
+        int: total number of images processed
+    """
+    with open(os.path.join(base_dir, "metadata.csv"), "w") as f:
         f.write("img_id,img_filename,y,label_name\n")
         image_id = 0
 
-        classes, class_to_idx = find_classes(data_root)
+        classes, class_to_idx = find_classes(base_dir)
         image_info, _ = collect_dataset_info(
-            data_root, class_to_idx, data="ImageNet-A")
+            base_dir, class_to_idx, dataset="ImageNet-A"
+        )
 
         for idx, info in enumerate(image_info):
             path, target, class_id = info
@@ -179,12 +224,21 @@ def prepare_imageneta_metadata(data_root):
 class ImageNet9(torch.utils.data.Dataset):
     def __init__(
         self,
-        basedir,
-        split,
-        transform=None,
-        attribute_embed=None,
-        cluster_file=None
+        basedir: str,
+        split: str,
+        transform: torchvision.transforms.Compose = None,
+        attribute_embed: str = None,
+        cluster_file: str = None,
     ):
+        """Initialize the ImageNet-9 dataset
+
+        Args:
+            basedir (str): path to the dataset folder
+            split (str): choose from {"train", "val", "test"}
+            transform (torchvision.transforms.Compose): a series of image transformations
+            attribute_embed (str, optional): path to the attribute embeddings. Defaults to None.
+            cluster_file (str, optional): path to the cluster file. Defaults to None.
+        """
         metadata_df = pd.read_csv(os.path.join(basedir, "metadata.csv"))
         split_info = metadata_df["split"].values
         print(len(metadata_df))
@@ -202,20 +256,23 @@ class ImageNet9(torch.utils.data.Dataset):
         self.split = split
         if split == "val":
             val_cluster_df = pd.read_csv(cluster_file)
-            def add_val_func(x): return os.path.join("val", x)
+
+            def add_val_func(x):
+                return os.path.join("val", x)
+
             val_cluster_df["path"] = val_cluster_df["path"].apply(add_val_func)
-            val_cluster_df = val_cluster_df.rename(
-                columns={"path": "img_filename"})
-            self.metadata_df = self.metadata_df.merge(
-                val_cluster_df, on="img_filename")
-            self.p_arrays = [self.metadata_df["cluster1"].values,
-                             self.metadata_df["cluster2"].values,
-                             self.metadata_df["cluster3"].values
-                             ]
+            val_cluster_df = val_cluster_df.rename(columns={"path": "img_filename"})
+            self.metadata_df = self.metadata_df.merge(val_cluster_df, on="img_filename")
+            self.p_arrays = [
+                self.metadata_df["cluster1"].values,
+                self.metadata_df["cluster2"].values,
+                self.metadata_df["cluster3"].values,
+            ]
             self.n_places = len(np.unique(self.p_arrays[0]))
-            self.group_arrays = [(
-                self.y_array * self.n_places + self.p_arrays[i]
-            ).astype("int") for i in range(3)]
+            self.group_arrays = [
+                (self.y_array * self.n_places + self.p_arrays[i]).astype("int")
+                for i in range(3)
+            ]
             self.n_groups = self.n_classes * self.n_places
 
         if attribute_embed and os.path.exists(attribute_embed):
@@ -225,12 +282,28 @@ class ImageNet9(torch.utils.data.Dataset):
         else:
             self.embeddings = None
 
-    def get_group(self, idx):
+    def get_group(self, idx: int):
+        """Get the pseudo group for the given index
+
+        Args:
+            idx (int): index of the image
+
+        Returns:
+            int: the pseudo group for the given index.
+        """
         y = self.y_array[idx]
         g = (self.embeddings[idx] == 1) * self.n_classes + y
         return g
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """Return the image, target, groups, target (place holder), and pseudo group for the given index
+
+        Args:
+            index (int): index of the image
+
+        Returns:
+            Tuple[torch.Tensor, int, np.ndarray, int, int]: image, target, groups, target, pseudo group
+        """
         path, target = self.filename_array[index], self.y_array[index]
         img_path = os.path.join(self.basedir, path)
         with warnings.catch_warnings():
@@ -255,9 +328,15 @@ class ImageNet9(torch.utils.data.Dataset):
 class ImageNetA(torch.utils.data.Dataset):
     def __init__(
         self,
-        basedir,
-        transform=None,
+        basedir: str,
+        transform: torchvision.transforms.Compose = None,
     ):
+        """Initialize the ImageNet-A dataset.
+
+        Args:
+            basedir (str): path to the dataset folder
+            transform (torchvision.transforms.Compose): a series of image transformations
+        """
         self.metadata_df = pd.read_csv(os.path.join(basedir, "metadata.csv"))
         print(len(self.metadata_df))
 
@@ -268,7 +347,15 @@ class ImageNetA(torch.utils.data.Dataset):
         self.basedir = basedir
         self.transform = transform
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
+        """Get the image and target for the given index
+
+        Args:
+            index (int): index of the image
+
+        Returns:
+            Tuple[torch.Tensor, int, int, int, int]: image and target, target x 3 (place holder)
+        """
         path, target = self.filename_array[index], self.y_array[index]
         img_path = os.path.join(self.basedir, path)
         with warnings.catch_warnings():
@@ -284,7 +371,16 @@ class ImageNetA(torch.utils.data.Dataset):
         return len(self.y_array)
 
 
-def get_imagenet_transform(train, augment_data=True):
+def get_imagenet_transform(train: bool, augment_data: bool = True):
+    """Get the image transformation for the ImageNet dataset
+
+    Args:
+        train (bool): whether the transformation is for training or testing
+        augment_data (bool, optional): whether to augment the data. Defaults to True.
+
+    Returns:
+        torchvision.transforms.Compose: a series of image transformations
+    """
     if train and augment_data:
         transform = transforms.Compose(
             [

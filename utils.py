@@ -13,10 +13,10 @@ def set_log_path(path):
     _log_path = path
 
 
-def log(obj, filename='log.txt'):
+def log(obj, filename="log.txt"):
     print(obj)
     if _log_path is not None:
-        with open(os.path.join(_log_path, filename), 'a') as f:
+        with open(os.path.join(_log_path, filename), "a") as f:
             print(obj, file=f)
 
 
@@ -50,8 +50,7 @@ def get_free_gpu():
     )
     output, error = grep2.communicate()
     memory_available = np.array(
-        [int(x.split(":")[1].strip().split()[0])
-         for x in output.split("\n")[0:-1]]
+        [int(x.split(":")[1].strip().split()[0]) for x in output.split("\n")[0:-1]]
     )
     return np.argsort(memory_available)
 
@@ -77,7 +76,7 @@ class Timer:
 
 class BestMetric:
     def __init__(self):
-        self.best_val = - 1.0
+        self.best_val = -1.0
         self.best_test = 0.0
 
     def add(self, val, test):

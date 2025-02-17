@@ -13,11 +13,10 @@ from tqdm import tqdm
 
 from torchvision.datasets import ImageFolder
 
+
 class ImageNetA(ImageFolder):
     def __init__(self, root, transform=None):
-        super().__init__(
-            root=os.path.join(root, "imagenet-a"), transform=transform
-        )
+        super().__init__(root=os.path.join(root, "imagenet-a"), transform=transform)
         thousand_k_to_200 = {
             0: -1,
             1: -1,
@@ -1021,9 +1020,7 @@ class ImageNetA(ImageFolder):
             999: -1,
         }
 
-        indices_in_1k = [
-            k for k in thousand_k_to_200 if thousand_k_to_200[k] != -1
-        ]
+        indices_in_1k = [k for k in thousand_k_to_200 if thousand_k_to_200[k] != -1]
         self.indices_in_1k = torch.tensor(indices_in_1k, dtype=torch.long)
 
     def __getitem__(self, index):
@@ -1054,8 +1051,7 @@ def get_transform_in(target_resolution, train, augment_data):
                 ),
                 transforms.CenterCrop(target_resolution),
                 transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [
-                                     0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ]
         )
     else:
@@ -1069,16 +1065,13 @@ def get_transform_in(target_resolution, train, augment_data):
                 ),
                 transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
-                transforms.Normalize([0.485, 0.456, 0.406], [
-                                     0.229, 0.224, 0.225]),
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
             ]
         )
     return transform
 
 
 if __name__ == "__main__":
-    dataset = ImageNetA(
-        root="/root/dataset/"
-    )
+    dataset = ImageNetA(root="/root/dataset/")
     print(len(dataset))
     print(dataset.__getitem__(2))

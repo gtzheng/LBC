@@ -395,6 +395,8 @@ def wide_resnet101_2(pretrained=False, progress=True, **kwargs):
     return _resnet(
         "wide_resnet101_2", Bottleneck, [3, 4, 23, 3], pretrained, progress, **kwargs
     )
+
+
 import torch
 import torch.nn as nn
 

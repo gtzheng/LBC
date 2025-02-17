@@ -10,7 +10,17 @@ from functools import partial
 from torch.utils.tensorboard import SummaryWriter
 from datasets.data_utils import get_dataloader
 import torch.nn as nn
-from utils import set_gpu, get_free_gpu, set_log_path, log, BestMetricGroup, Timer, time_str, AverageMeter, set_seed
+from utils import (
+    set_gpu,
+    get_free_gpu,
+    set_log_path,
+    log,
+    BestMetricGroup,
+    Timer,
+    time_str,
+    AverageMeter,
+    set_seed,
+)
 
 from config import *
 from datetime import datetime
@@ -49,20 +59,35 @@ def get_args():
 
 
 class ERMModel(nn.Module):
-    def __init__(self, backbone, num_classes, pretrained=True):
+    def __init__(self, backbone: str, num_classes: int, pretrained: bool = True):
+        """Initialize the ERM model
+
+        Args:
+            backbone (str): the backbone architecture
+            num_classes (int): number of classes
+            pretrained (bool, optional): whether to use pretrained model. Defaults to True.
+        """
         super(ERMModel, self).__init__()
         if backbone == "resnet50":
             if pretrained:
                 self.backbone = resnet50()
                 self.backbone.load_state_dict(
-                    torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+                    torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(
+                        progress=True
+                    ),
+                    strict=False,
+                )
             else:
                 self.backbone = resnet50()
         elif backbone == "resnet18":
             if pretrained:
                 self.backbone = resnet18()
                 self.backbone.load_state_dict(
-                    torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(progress=True), strict=False)
+                    torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(
+                        progress=True
+                    ),
+                    strict=False,
+                )
             else:
                 self.backbone = resnet18()
         d = self.backbone.out_dim
@@ -76,7 +101,17 @@ class ERMModel(nn.Module):
         return logits
 
 
-def prepare_model(dataset, backbone, pretrained=True):
+def prepare_model(dataset: str, backbone: str, pretrained: bool = True):
+    """Prepare the ERM model
+
+    Args:
+        dataset (str): dataset name
+        backbone (str): backbone architecture
+        pretrained (bool, optional): whether to use pretrained model. Defaults to True.
+
+    Returns:
+        ERMModel: the ERM model
+    """
     if pretrained:
         print("Use ImageNet pretrained model")
     else:
@@ -99,11 +134,12 @@ def pretrain(args):
     now = datetime.now()
     timestamp = now.strftime("%m%d%Y-%H%M%S")
     output_dir = os.path.join(
-        EXPR_PATH, f"pretrain_{args.dataset}_{args.backbone}_{timestamp}_{os.uname()[1]}"
+        EXPR_PATH,
+        f"pretrain_{args.dataset}_{args.backbone}_{timestamp}_{os.uname()[1]}",
     )
     print(f"Preparing directory {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
-    
+
     if args.dataset == "imagenet-9" and not args.pretrained_model:
         args.init_lr = 0.05
         args.num_epochs = 120
@@ -119,10 +155,10 @@ def pretrain(args):
 
     # prepare data loaders
     train_loader, idx_train_loader, val_loader, test_loader = get_dataloader(
-        args.dataset, args.batch_size)
+        args.dataset, args.batch_size
+    )
     # prepare the model
-    model = prepare_model(args.dataset, args.backbone,
-                          pretrained=args.pretrained_model)
+    model = prepare_model(args.dataset, args.backbone, pretrained=args.pretrained_model)
 
     if args.resume is not None:
         print("Resuming from checkpoint at {}...".format(args.resume))
@@ -139,7 +175,8 @@ def pretrain(args):
     )
     if args.dataset == "imagenet-9":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=milestones, gamma=0.2)
+            optimizer, milestones=milestones, gamma=0.2
+        )
     else:
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=args.num_epochs
@@ -188,9 +225,9 @@ def pretrain(args):
                         model.state_dict(), os.path.join(output_dir, "best_model.pt")
                     )
         log(
-            f"Epoch {epoch}\t Loss: {train_loss_avg:.6f} Acc: {train_acc_avg:.6f} | ValAcc {acc_meter.avg:.6f}\n")
-        torch.save(model.state_dict(), os.path.join(
-            output_dir, "latest_model.pt"))
+            f"Epoch {epoch}\t Loss: {train_loss_avg:.6f} Acc: {train_acc_avg:.6f} | ValAcc {acc_meter.avg:.6f}\n"
+        )
+        torch.save(model.state_dict(), os.path.join(output_dir, "latest_model.pt"))
 
 
 if __name__ == "__main__":

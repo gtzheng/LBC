@@ -11,7 +11,16 @@ from datetime import datetime
 
 from datasets.data_utils import get_dataloader
 from models.resnet import resnet18, resnet50
-from utils import set_gpu, get_free_gpu, set_log_path, log, BestMetricGroup, Timer, time_str, AverageMeter
+from utils import (
+    set_gpu,
+    get_free_gpu,
+    set_log_path,
+    log,
+    BestMetricGroup,
+    Timer,
+    time_str,
+    AverageMeter,
+)
 from test import test_model, test_model_pseudo
 from config import *
 from sklearn.cluster import KMeans
@@ -20,8 +29,25 @@ from datasets.data_utils import IdxDataset
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 
+def get_correlated_features(
+    model: torch.nn.Module,
+    dataloader: torch.utils.data.DataLoader,
+    pred_func: str = None,
+    score_func: str = "default",
+):
+    """Calculate the spuriousness scores of the activated concepts for each class using the model, dataloader and score function.
+    An activated concept for a class means that the concept is present in at least one image of that class.
+    A spuriousness score for each activated concept reflects the discrepancy between prediction accuracies on images with and without the concept. A large score indicates a large discrepancy, which suggests that the concept is spurious.
 
-def get_correlated_features(model, dataloader, pred_func=None, score_func="default"):
+    Args:
+        model (torch.nn.Module): a prediction model.
+        dataloader (torch.utils.data.DataLoader): a dataloader.
+        pred_func (str, optional): the type of the prediction function. Defaults to None.
+        score_func (str, optional): the type of the score function. Defaults to "tanh-abs-log".
+
+    Returns:
+        dict[int, tuple[np.array, np.array]]: a dictionary of spuriousness scores and the indexes of active features for each class.
+    """
     class_wise_data = {}
     model.eval()
     with torch.no_grad():
@@ -35,19 +61,19 @@ def get_correlated_features(model, dataloader, pred_func=None, score_func="defau
             for i in range(len(y)):
                 l = y[i].item()
                 if l in class_wise_data:
-                    class_wise_data[l].append((idx[i].item(),int(preds[i]==l)))
+                    class_wise_data[l].append((idx[i].item(), int(preds[i] == l)))
                 else:
-                    class_wise_data[l] = [(idx[i].item(),int(preds[i]==l))]
-    embeddings = dataloader.dataset.dataset.embeddings  
+                    class_wise_data[l] = [(idx[i].item(), int(preds[i] == l))]
+    embeddings = dataloader.dataset.dataset.embeddings
     class_correlated_feas = {}
-    
+
     eps = 1e-10
     for c in class_wise_data:
         count_pos = 0
         num_per_class = len(class_wise_data[c])
         counts_pos_w = np.zeros(embeddings.shape[1])
         counts_neg_w = np.zeros(embeddings.shape[1])
-        
+
         counts_pos_wo = np.zeros(embeddings.shape[1])
         counts_neg_wo = np.zeros(embeddings.shape[1])
         for idx, pred_res in class_wise_data[c]:
@@ -61,29 +87,35 @@ def get_correlated_features(model, dataloader, pred_func=None, score_func="defau
 
         all_indexes = np.arange(embeddings.shape[1])
         active_indexes = all_indexes[(counts_pos_w + counts_neg_w) > 0]
-        p_y1 = count_pos / num_per_class 
+        p_y1 = count_pos / num_per_class
         p_y0 = 1 - p_y1
 
-        p_y1_w0 = counts_pos_wo[active_indexes] / (counts_pos_wo[active_indexes] + counts_neg_wo[active_indexes] + eps)
+        p_y1_w0 = counts_pos_wo[active_indexes] / (
+            counts_pos_wo[active_indexes] + counts_neg_wo[active_indexes] + eps
+        )
         p_y0_w0 = 1 - p_y1_w0
 
-        p_y1_w1 = counts_pos_w[active_indexes] / (counts_pos_w[active_indexes] + counts_neg_w[active_indexes] + eps)
+        p_y1_w1 = counts_pos_w[active_indexes] / (
+            counts_pos_w[active_indexes] + counts_neg_w[active_indexes] + eps
+        )
         p_y0_w1 = 1 - p_y1_w1
 
-        p_w1 = (counts_pos_w[active_indexes] + counts_neg_w[active_indexes]) / num_per_class
+        p_w1 = (
+            counts_pos_w[active_indexes] + counts_neg_w[active_indexes]
+        ) / num_per_class
         p_w0 = 1 - p_w1
 
         cond = (p_y1_w1 == 0) | (p_y1_w0 == 0)
         p_y1_w1[cond] = 1.0
-        p_y1_w0[cond] = 1.0 
+        p_y1_w0[cond] = 1.0
         if score_func == "default":
-            scores = np.tanh(abs(np.log(p_y1_w1 / (p_y1_w0 + eps)+eps)))
+            scores = np.tanh(abs(np.log(p_y1_w1 / (p_y1_w0 + eps) + eps)))
         elif score_func == "tanh-log":
-            scores = np.tanh(np.log(p_y1_w1 / (p_y1_w0 + eps)+eps))
+            scores = np.tanh(np.log(p_y1_w1 / (p_y1_w0 + eps) + eps))
         elif score_func == "abs-log":
-            scores = abs(np.log(p_y1_w1 / (p_y1_w0 + eps)+eps))
+            scores = abs(np.log(p_y1_w1 / (p_y1_w0 + eps) + eps))
         elif score_func == "log":
-            scores = np.log(p_y1_w1 / (p_y1_w0 + eps)+eps)
+            scores = np.log(p_y1_w1 / (p_y1_w0 + eps) + eps)
         elif score_func == "abs-diff":
             scores = abs(p_y1_w1 - p_y1_w0)
         elif score_func == "diff":
@@ -93,43 +125,88 @@ def get_correlated_features(model, dataloader, pred_func=None, score_func="defau
     return class_correlated_feas
 
 
-
 class IdentityModel(nn.Module):
     def __init__(self):
         super(IdentityModel, self).__init__()
+
     def forward(self, x):
         return x
 
+
 class LBC(nn.Module):
-    def __init__(self, backbone, num_classes, n_clusters=2, pretrained=True):
+    def __init__(
+        self,
+        backbone: str,
+        num_classes: int,
+        n_clusters: int = 2,
+        pretrained: bool = True,
+    ):
+        """Initialize the LBC model
+
+        Args:
+            backbone (str): the backbone model
+            num_classes (int): the number of classes
+            n_clusters (int, optional): the number of clusters. Defaults to 2.
+            pretrained (bool, optional): whether to use the pretrained model. Defaults to True.
+        """
         super(LBC, self).__init__()
         if backbone == "resnet50":
             if pretrained:
                 self.backbone = resnet50()
-                self.backbone.load_state_dict(torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(progress=True),strict=False)
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet50_Weights.DEFAULT.get_state_dict(
+                        progress=True
+                    ),
+                    strict=False,
+                )
             else:
                 self.backbone = resnet50()
         elif backbone == "resnet18":
             if pretrained:
                 self.backbone = resnet18()
-                self.backbone.load_state_dict(torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(progress=True),strict=False)
+                self.backbone.load_state_dict(
+                    torchvision.models.ResNet18_Weights.DEFAULT.get_state_dict(
+                        progress=True
+                    ),
+                    strict=False,
+                )
             else:
                 self.backbone = resnet18()
         d = self.backbone.out_dim
-  
-        self.classifier = nn.Linear(d, num_classes*n_clusters)
+
+        self.classifier = nn.Linear(d, num_classes * n_clusters)
         self.num_classes = num_classes
         self.fea_dim = d
         self.fc = nn.Linear(d, num_classes)
         self.K = n_clusters
-    
-        
-    def normal_forward(self, x):
+
+    def normal_forward(self, x: torch.tensor):
+        """Normal prediction function
+
+        Args:
+            x (torch.tensor): input image
+
+        Returns:
+            torch.tensor: the logits
+        """
         fea = self.backbone(x)
         logits = self.fc(fea)
         return logits
-    
-    def forward(self, x, pred=False):
+
+    def forward(self, x: torch.tensor, pred: bool = False):
+        """LBC forward function
+
+        Args:
+            x (torch.tensor): input image
+            pred (bool, optional): whether to return the prediction. Defaults to False.
+
+        Returns:
+            if is in training mode:
+                torch.tensor: the logits (fine-grained)
+                torch.tensor: the prediction if pred is True
+            else:
+                torch.tensor: the class logits
+        """
         fea = self.backbone(x)
         logits = self.classifier(fea)
         if self.classifier.training:
@@ -140,11 +217,28 @@ class LBC(nn.Module):
             else:
                 return logits
         else:
-            class_logits = torch.max(logits.reshape(-1, self.num_classes, self.K),dim=-1)[0]
+            class_logits = torch.max(
+                logits.reshape(-1, self.num_classes, self.K), dim=-1
+            )[0]
             return class_logits
 
+
 class SpuriousSampler:
-    def __init__(self, dataset, batch_size, num_batches, group_ratios=None):
+    def __init__(
+        self,
+        dataset: torch.utils.data.DataLoader,
+        batch_size: int,
+        num_batches: int,
+        group_ratios: float = None,
+    ):
+        """Initialize the SpuriousSampler
+
+        Args:
+            dataset (torch.utils.data.DataLoader): the dataset used to construct the sampler
+            batch_size (int): batch size
+            num_batches (int): number of batches per epoch
+            group_ratios (float, optional): group ratios. Defaults to None (automatically calculated).
+        """
         self.num_batches = num_batches
         self.batch_size = batch_size
         self.groups = dataset.groups
@@ -160,28 +254,38 @@ class SpuriousSampler:
             group_counts = np.array(group_counts)
             group_counts = group_counts.reshape(dataset.n_classes, K)
             num_zeros = (group_counts == 0).sum(axis=1)
-            ratios = np.log(np.array([group_counts[c,group_counts[c]>0].std() for c in range(dataset.n_classes)])+1)
-            
+            ratios = np.log(
+                np.array(
+                    [
+                        group_counts[c, group_counts[c] > 0].std()
+                        for c in range(dataset.n_classes)
+                    ]
+                )
+                + 1
+            )
+
             self.group_ratios = np.zeros((dataset.n_classes, K))
-            self.num_per_groups = np.zeros((dataset.n_classes, K),dtype=np.int64)
-            self.num_per_groups[group_counts > 0] = 5 # ensure that non-zero group will be sampled
+            self.num_per_groups = np.zeros((dataset.n_classes, K), dtype=np.int64)
+            self.num_per_groups[group_counts > 0] = (
+                5  # ensure that non-zero group will be sampled
+            )
             for c in range(dataset.n_classes):
-                self.group_ratios[c,:] = ratios[c] / (K - num_zeros[c])
-            self.group_ratios[group_counts==0] = 0
+                self.group_ratios[c, :] = ratios[c] / (K - num_zeros[c])
+            self.group_ratios[group_counts == 0] = 0
             self.group_ratios = self.group_ratios / self.group_ratios.sum()
-            self.num_per_groups += np.round(self.group_ratios * self.batch_size).astype(np.int64)
+            self.num_per_groups += np.round(self.group_ratios * self.batch_size).astype(
+                np.int64
+            )
             self.num_per_groups = self.num_per_groups.reshape(-1)
             self.group_ratios = self.group_ratios.reshape(-1)
 
         else:
             self.group_ratios = group_ratios
         ratios = self.group_ratios.reshape(-1, K)
-       
 
-        
     def __len__(self):
         return self.num_batches
-    
+
     def __iter__(self):
         for n in range(self.num_batches):
             batch = []
@@ -189,28 +293,50 @@ class SpuriousSampler:
             for g in range(self.n_groups):
                 if num_per_groups[g] == 0:
                     continue
-                batch.append(np.random.choice(self.group_indexes[g], num_per_groups[g], replace=True))
+                batch.append(
+                    np.random.choice(
+                        self.group_indexes[g], num_per_groups[g], replace=True
+                    )
+                )
             batch = np.concatenate(batch)
             yield batch
-    
-            
+
+
 class PseudoGroupDataset(Dataset):
-    def __init__(self, dataset, feature_indexes, n_clusters, use_prob=False, prob=[0.7,0.7]):
+    def __init__(
+        self,
+        dataset: torch.utils.data.DataLoader,
+        feature_indexes: dict[int, list[np.array, np.array]],
+        n_clusters: int,
+        use_prob: bool = False,
+        prob: list[int, int] = [0.7, 0.7],
+    ):
+        """Initialize the PseudoGroupDataset
+
+        Args:
+            dataset (torch.utils.data.DataLoader): the dataset used to construct the pseudo group dataset
+            feature_indexes (dict[int,list[np.array, np.array]]): the feature indexes for each class. For each class in feature_indexes, the list contains the spuriousness scores and the indexes of active features.
+            n_clusters (int): the number of clusters given to the KMeans algorithm
+            use_prob (bool, optional): whether to use the group probabilities. Defaults to False.
+            prob (list[int, int], optional): probabilities assigned to classes. Defaults to [0.7,0.7].
+        """
         self.dataset = dataset
         all_active_indexes = []
         for c in feature_indexes:
             all_active_indexes.append(feature_indexes[c][1])
         all_active_indexes = np.unique(np.concatenate(all_active_indexes))
-        ori2idx = {l:i for i,l in enumerate(all_active_indexes)}
+        ori2idx = {l: i for i, l in enumerate(all_active_indexes)}
         cls_indexes = {}
         for c in feature_indexes:
             cls_indexes[c] = np.array([ori2idx[l] for l in feature_indexes[c][1]])
 
-        embeddings = dataset.embeddings[:,all_active_indexes]
+        embeddings = dataset.embeddings[:, all_active_indexes]
         for c in feature_indexes:
-            embeddings[np.ix_(dataset.y_array==c, cls_indexes[c])] = embeddings[np.ix_(dataset.y_array==c, cls_indexes[c])] * feature_indexes[c][0].reshape(1,-1)
-        kmeans = KMeans(n_clusters=n_clusters,n_init="auto").fit(embeddings)
-        
+            embeddings[np.ix_(dataset.y_array == c, cls_indexes[c])] = embeddings[
+                np.ix_(dataset.y_array == c, cls_indexes[c])
+            ] * feature_indexes[c][0].reshape(1, -1)
+        kmeans = KMeans(n_clusters=n_clusters, n_init="auto").fit(embeddings)
+
         self.groups = dataset.y_array * n_clusters + kmeans.labels_
 
         self.n_classes = dataset.n_classes
@@ -219,28 +345,74 @@ class PseudoGroupDataset(Dataset):
 
         self.p = prob
         self.use_prob = use_prob
-            
+
     def __len__(self):
         return len(self.dataset)
 
-    def group2prob(self, y, g, p):
+    def group2prob(self, y: int, g: int, p: float):
+        """Calculate the group probabilities
+
+        Args:
+            y (int): the class label
+            g (int): the group label
+            p (float): the probability assigned to the class
+
+        Returns:
+            np.array: the group probabilities
+        """
         probs = np.zeros(self.n_groups)
-        probs[y*self.K:(y+1)*self.K] = (1-p)/(self.K-1)
+        probs[y * self.K : (y + 1) * self.K] = (1 - p) / (self.K - 1)
         probs[g] = p
         return probs
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
+        """Return the data of the given index
+
+        Args:
+            idx (int): the index of the data
+
+        Returns:
+            torch.Tensor: the image
+            int: the label of the image
+            np.array or int: the group probabilities if use_prob is True else group label
+            int: the group of the image (place holder)
+            int: place holder
+        """
         x = self.dataset[idx][0]
         y = self.dataset[idx][1]
         if self.use_prob:
             p = self.p[y]
-            return x, y, self.group2prob(y, self.groups[idx], p), self.groups[idx], 0 # the last two are place holders
+            return (
+                x,
+                y,
+                self.group2prob(y, self.groups[idx], p),
+                self.groups[idx],
+                0,
+            )  # the last two are place holders
         else:
-            return x, y, self.groups[idx], self.groups[idx], 0 # the last two are place holders
-            
+            return (
+                x,
+                y,
+                self.groups[idx],
+                self.groups[idx],
+                0,
+            )  # the last two are place holders
 
 
-def prepare_model(dataset, backbone, load_erm=True, pretrained=True):
+def prepare_model(
+    dataset: str, backbone: str, load_erm: bool = True, pretrained: bool = True
+):
+    """Prepare the LBC model
+
+    Args:
+        dataset (str): the dataset name
+        backbone (str): the backbone model
+        load_erm (bool, optional): whether to load the ERM model. Defaults to True.
+        pretrained (bool, optional): whether to use the pretrained model. Defaults to True.
+
+    Returns:
+        LBC: the LBC model
+    """
     if dataset == "waterbirds":
         ckpt_path = WATERBIRDS_ERM_MODEL
         umodel = LBC(backbone, 2, args.K, pretrained)
@@ -264,6 +436,7 @@ def prepare_model(dataset, backbone, load_erm=True, pretrained=True):
     umodel.cuda()
     return umodel
 
+
 def main(args):
     timer = Timer()
     # prepare the experiment folder
@@ -271,20 +444,20 @@ def main(args):
     now = datetime.now()
     timestamp = now.strftime("%m%d%Y-%H%M%S")
     expr_name += f"_{timestamp}"
-        
+
     if args.mode == "debug":
         save_path = os.path.join(EXPR_PATH, f"{args.dataset}_debug")
     else:
         save_path = os.path.join(EXPR_PATH, expr_name)
-        
+
     os.makedirs(save_path, exist_ok=True)
     set_log_path(save_path)
-    
+
     args_str = (
-            "--------Parameters--------\n"
-            + "\n".join(["{}={}".format(k, args.__dict__[k]) for k in args.__dict__])
-            + "\n--------------------"
-        )
+        "--------Parameters--------\n"
+        + "\n".join(["{}={}".format(k, args.__dict__[k]) for k in args.__dict__])
+        + "\n--------------------"
+    )
     log(args_str)
     if args.dataset == "waterbirds":
         sel_metric = "pseudo_val_unbiased"
@@ -301,14 +474,16 @@ def main(args):
             args.batch_size = 256
             args.init_lr = 0.05
             milestones = [50, 80, 100]
-        
+
     # set gpu
     gpu = ",".join([str(i) for i in get_free_gpu()[0:1]])
     set_gpu(gpu)
-    
+
     # prepare data loaders
-    train_loader, idx_train_loader, val_loader, test_loader = get_dataloader(args.dataset, args.batch_size)
-    #prepare the model
+    train_loader, idx_train_loader, val_loader, test_loader = get_dataloader(
+        args.dataset, args.batch_size
+    )
+    # prepare the model
     load_erm = True if args.load == "erm" else False
     umodel = prepare_model(args.dataset, args.backbone, load_erm, args.pretrained)
     if args.resume:
@@ -320,61 +495,82 @@ def main(args):
     umodel.train()
     loss_func = nn.CrossEntropyLoss(reduction="none")
 
-    metrics = {key:BestMetricGroup() for key in ["val_avg", "val_unbiased", "val_worst", "val_pseudo_worst", "pseudo_val_unbiased"]}
+    metrics = {
+        key: BestMetricGroup()
+        for key in [
+            "val_avg",
+            "val_unbiased",
+            "val_worst",
+            "val_pseudo_worst",
+            "pseudo_val_unbiased",
+        ]
+    }
     tolerance_count = 0
     if args.finetune_part == "last":
         optimizer = torch.optim.SGD(
-                umodel.classifier.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4
+            umodel.classifier.parameters(), lr=args.lr, momentum=0.9, weight_decay=1e-4
         )
     elif args.finetune_part == "all":
         optimizer = torch.optim.SGD(
-                [{'params':umodel.parameters()}], lr=args.lr, momentum=0.9, weight_decay=1e-4
+            [{"params": umodel.parameters()}],
+            lr=args.lr,
+            momentum=0.9,
+            weight_decay=1e-4,
         )
     if args.load != "erm" and not args.pretrained and args.dataset == "imagenet-9":
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=milestones, gamma=0.2)
+            optimizer, milestones=milestones, gamma=0.2
+        )
     else:
         scheduler = None
-   
 
-    
     # group_ratios = None
     spurious_fea_dict = {}
-    for epoch in range(1, args.epoch+1):
+    for epoch in range(1, args.epoch + 1):
         if epoch == 1:
-            class_correlated_feas = get_correlated_features(umodel, idx_train_loader, "normal", score_func=args.score)
+            class_correlated_feas = get_correlated_features(
+                umodel, idx_train_loader, "normal", score_func=args.score
+            )
         else:
-            class_correlated_feas = get_correlated_features(umodel, idx_train_loader, score_func=args.score)
+            class_correlated_feas = get_correlated_features(
+                umodel, idx_train_loader, score_func=args.score
+            )
         fea_indexes = {}
         for c in class_correlated_feas:
             sorted_indexes = np.argsort(-class_correlated_feas[c][0])
             sel_indexes = sorted_indexes
-            fea_indexes[c] = (class_correlated_feas[c][0][sel_indexes], class_correlated_feas[c][1][sel_indexes])
-  
+            fea_indexes[c] = (
+                class_correlated_feas[c][0][sel_indexes],
+                class_correlated_feas[c][1][sel_indexes],
+            )
 
         if args.finetune_part == "last":
-            umodel.eval()  
-            umodel.classifier.train() 
+            umodel.eval()
+            umodel.classifier.train()
         else:
             umodel.train()
 
         pseudo_val_dataset = PseudoGroupDataset(val_loader.dataset, fea_indexes, args.K)
         pseudo_val_loader = DataLoader(
-                    pseudo_val_dataset,
-                    batch_size=args.batch_size,
-                    pin_memory=True,
-                    num_workers=4,
-                )
-        lbc_dataset = PseudoGroupDataset(train_loader.dataset, fea_indexes, args.K, False)
+            pseudo_val_dataset,
+            batch_size=args.batch_size,
+            pin_memory=True,
+            num_workers=4,
+        )
+        lbc_dataset = PseudoGroupDataset(
+            train_loader.dataset, fea_indexes, args.K, False
+        )
         idx_lbc_dataset = IdxDataset(lbc_dataset)
-        batch_sampler = SpuriousSampler(lbc_dataset, args.batch_size, args.num_batches, group_ratios=None)
+        batch_sampler = SpuriousSampler(
+            lbc_dataset, args.batch_size, args.num_batches, group_ratios=None
+        )
         lbc_dataloader = DataLoader(
-                    idx_lbc_dataset,
-                    batch_sampler=batch_sampler,
-                    pin_memory=True,
-                    num_workers=4,
-                )
-            
+            idx_lbc_dataset,
+            batch_sampler=batch_sampler,
+            pin_memory=True,
+            num_workers=4,
+        )
+
         loss_avg = 0.0
         acc_avg = 0.0
         counts = 0
@@ -388,7 +584,6 @@ def main(args):
             losses = loss_func(logits, g_p)
             loss = losses.mean()
 
-            
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -398,12 +593,14 @@ def main(args):
             acc_avg += acc
         acc_avg /= counts
         loss_avg /= counts
-       
+
         if scheduler:
             scheduler.step()
         val_avg_acc, val_unbiased_acc, val_worst_acc = test_model(umodel, val_loader)
         _, pseudo_val_worst, pseudo_val_unbiased = test_model_pseudo(umodel, val_loader)
-        test_avg_acc, test_unbiased_acc, test_worst_acc = test_model(umodel, test_loader)
+        test_avg_acc, test_unbiased_acc, test_worst_acc = test_model(
+            umodel, test_loader
+        )
         if sel_metric == "pseudo_val_unbiased":
             sel_metric_val = pseudo_val_unbiased
         elif sel_metric == "val_pseudo_worst":
@@ -414,46 +611,63 @@ def main(args):
             sel_metric_val = val_unbiased_acc
         if metrics[sel_metric].best_val < sel_metric_val:
             torch.save(umodel.state_dict(), os.path.join(save_path, "best_model.pt"))
-        
-        metrics["val_avg"].add(val_avg_acc, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc))
-        metrics["val_unbiased"].add(val_unbiased_acc, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc))
-        metrics["val_worst"].add(val_worst_acc, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc))
-        
-        metrics["val_pseudo_worst"].add(pseudo_val_worst, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc))
-        metrics["pseudo_val_unbiased"].add(pseudo_val_unbiased, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc))
-        
+
+        metrics["val_avg"].add(
+            val_avg_acc, (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc)
+        )
+        metrics["val_unbiased"].add(
+            val_unbiased_acc,
+            (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc),
+        )
+        metrics["val_worst"].add(
+            val_worst_acc,
+            (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc),
+        )
+
+        metrics["val_pseudo_worst"].add(
+            pseudo_val_worst,
+            (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc),
+        )
+        metrics["pseudo_val_unbiased"].add(
+            pseudo_val_unbiased,
+            (test_avg_acc, test_unbiased_acc, test_worst_acc, val_avg_acc),
+        )
 
         test_best_avg_acc = metrics[sel_metric].best_test[0]
         test_worst_best_group_acc = metrics[sel_metric].best_test[2]
-        
-        log(f"[Epoch {epoch}] loss {loss_avg:.6f} acc_avg {acc_avg:.6f} val_avg {val_avg_acc:.6f} val_unbiased {val_unbiased_acc:.6f} val_wst {val_worst_acc:.6f} val_pwst {pseudo_val_worst:.6f} val_punbiased {pseudo_val_unbiased:.6f} test_avg {test_avg_acc:.6f} test_wst {test_worst_acc:.6f} (best avg:{test_best_avg_acc:.6f} worst:{test_worst_best_group_acc:.6f})")
-    
-    
+
+        log(
+            f"[Epoch {epoch}] loss {loss_avg:.6f} acc_avg {acc_avg:.6f} val_avg {val_avg_acc:.6f} val_unbiased {val_unbiased_acc:.6f} val_wst {val_worst_acc:.6f} val_pwst {pseudo_val_worst:.6f} val_punbiased {pseudo_val_unbiased:.6f} test_avg {test_avg_acc:.6f} test_wst {test_worst_acc:.6f} (best avg:{test_best_avg_acc:.6f} worst:{test_worst_best_group_acc:.6f})"
+        )
+
     val_avg_str = metrics["val_avg"].str()
     val_unbiased_str = metrics["val_unbiased"].str()
     val_worst_str = metrics["val_worst"].str()
     val_pseudo_worst_str = metrics["val_pseudo_worst"].str()
     pseudo_val_unbiased_str = metrics["pseudo_val_unbiased"].str()
-    
+
     log(f"\n[val_avg] {val_avg_str} ")
     log(f"\n[val_unbiased] {val_unbiased_str}")
     log(f"\n[val_worst] {val_worst_str}")
     log(f"\n[val_pseudo_worst] {val_pseudo_worst_str}")
     log(f"\n[pseudo_val_unbiased] {pseudo_val_unbiased_str}")
-    
-     
+
     torch.save(umodel.state_dict(), os.path.join(save_path, "last_model.pt"))
     elapsed_time = timer.t()
     avg_per_epoch = elapsed_time / epoch
-    
+
     with open(f"debiasing_results_{args.tag}.csv", "a") as f:
         for key in metrics:
             test_avg_acc = metrics[key].best_test[0]
             test_worst_acc = metrics[key].best_test[2]
             test_unbiased = metrics[key].best_test[1]
             val_avg_acc = metrics[key].best_test[3]
-            f.write(f"{expr_name},{key},{metrics[key].best_val:.6f},{test_avg_acc:.6f},{test_worst_acc:.6f},{test_unbiased:.6f},{val_avg_acc:.6f},{time_str(elapsed_time)},{time_str(avg_per_epoch)}\n")
-if __name__ == '__main__':
+            f.write(
+                f"{expr_name},{key},{metrics[key].best_val:.6f},{test_avg_acc:.6f},{test_worst_acc:.6f},{test_unbiased:.6f},{val_avg_acc:.6f},{time_str(elapsed_time)},{time_str(avg_per_epoch)}\n"
+            )
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="lbc spurious features")
 
     parser.add_argument(
@@ -477,7 +691,6 @@ if __name__ == '__main__':
         help="select the top scoring features",
     )
 
-
     parser.add_argument(
         "--batch_size",
         default=128,
@@ -492,14 +705,13 @@ if __name__ == '__main__':
         help="number of batches per epoch",
     )
 
-
     parser.add_argument(
         "--epoch",
         default=20,
         type=int,
         help="number of epochs to train the main model",
     )
-    
+
     parser.add_argument(
         "--K",
         default=2,
@@ -523,7 +735,7 @@ if __name__ == '__main__':
 
     parser.add_argument(
         "--lr",
-        default=1.e-4,
+        default=1.0e-4,
         type=float,
         help="learning rate for training the main model",
     )
@@ -570,8 +782,6 @@ if __name__ == '__main__':
         action="store_true",
         help="choose score function",
     )
-    
-
 
     parser.add_argument(
         "--load",
@@ -581,4 +791,3 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
     main(args)
-    

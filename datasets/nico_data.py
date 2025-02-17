@@ -19,9 +19,11 @@ from config import NICO_DATA_FOLDER, NICO_CXT_DIC_PATH, NICO_CLASS_DIC_PATH
 
 # reference to https://github.com/Wangt-CN/CaaM and https://github.com/Nayeong-V-Kim/LWBC/tree/master
 
+
 def prepare_metadata():
-    cxt_dic = json.load(open(NICO_CXT_DIC_PATH, 'r'))
-    class_dic = json.load(open(NICO_CLASS_DIC_PATH, 'r'))
+    """prepare metadata for nico dataset"""
+    cxt_dic = json.load(open(NICO_CXT_DIC_PATH, "r"))
+    class_dic = json.load(open(NICO_CLASS_DIC_PATH, "r"))
     cxt_index2name = {i: n for n, i in cxt_dic.items()}
     class_index2name = {i: n for n, i in class_dic.items()}
 
@@ -34,7 +36,7 @@ def prepare_metadata():
     for split_id, split in enumerate(["train", "val", "test"]):
         all_file_name = os.listdir(os.path.join(NICO_DATA_FOLDER, split))
         for file_name in all_file_name:
-            label, context, index = file_name.split('_')
+            label, context, index = file_name.split("_")
             file_names.append(os.path.join(split, file_name))
             contexts.append(int(context))
             context_names.append(cxt_index2name[int(context)])
@@ -46,10 +48,8 @@ def prepare_metadata():
     contexts_unique = sorted(list(set(contexts)))
     label2unique = {l: i for i, l in enumerate(labels_unique)}
     context2unique = {c: i for i, c in enumerate(contexts_unique)}
-    uniquelabel2name = {
-        label2unique[l]: class_index2name[l] for l in labels_unique}
-    uniquecontext2name = {
-        context2unique[c]: cxt_index2name[c] for c in contexts_unique}
+    uniquelabel2name = {label2unique[l]: class_index2name[l] for l in labels_unique}
+    uniquecontext2name = {context2unique[c]: cxt_index2name[c] for c in contexts_unique}
 
     name2uniquelabel = {n: l for l, n in uniquelabel2name.items()}
     name2uniquecontext = {n: c for c, n in uniquecontext2name.items()}
@@ -64,32 +64,62 @@ def prepare_metadata():
             context = context2unique[contexts[i]]
             context_name = context_names[i]
             f.write(
-                f"{i},{file_name},{label},{label_name},{split_id},{context},{context_name}\n")
+                f"{i},{file_name},{label},{label_name},{split_id},{context},{context_name}\n"
+            )
 
 
-def get_transform_nico(train, augment_data=True):
+def get_transform_nico(train: bool, augment_data: bool = True):
+    """Get the transform for nico dataset
+
+    Args:
+        train (bool): whether the transform is for training or not.
+        augment_data (bool, optional): whether to augment the data. Defaults to True.
+
+    Returns:
+        torchvision.transforms: the transform for nico dataset
+    """
     mean = [0.52418953, 0.5233741, 0.44896784]
     std = [0.21851876, 0.2175944, 0.22552039]
     if train and augment_data:
-        transform = transforms.Compose([
-            transforms.Resize(224),
-            transforms.RandomCrop(224, padding=16),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std)
-        ])
+        transform = transforms.Compose(
+            [
+                transforms.Resize(224),
+                transforms.RandomCrop(224, padding=16),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomRotation(15),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
     else:
-        transform = transforms.Compose([
-            transforms.Resize([224, 224]),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std)
-        ])
+        transform = transforms.Compose(
+            [
+                transforms.Resize([224, 224]),
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
     return transform
 
 
 class NICO_dataset(Dataset):
-    def __init__(self, basedir, split, balance_factor=1.0, transform=None, attribute_embed=None):
+    def __init__(
+        self,
+        basedir: str,
+        split: str,
+        balance_factor: float = 1.0,
+        transform: torchvision.transforms.Compose = None,
+        attribute_embed: str = None,
+    ):
+        """Initialize the NICO dataset
+
+        Args:
+            basedir (str): the base directory of the dataset
+            split (str): the split of the dataset
+            balance_factor (float, optional): Not used. Defaults to 1.0.
+            transform (torchvision.transforms.Compose, optional): the transform for the dataset. Defaults to None.
+            attribute_embed (str, optional): the path to the attribute embedding. Defaults to None.
+        """
         super(NICO_dataset, self).__init__()
         assert split in ["train", "val", "test"], f"invalida split = {split}"
         self.basedir = basedir
@@ -112,13 +142,11 @@ class NICO_dataset(Dataset):
         for i in range(len(self.p_array)):
             self.contextname2index[contextnames[i]] = self.p_array[i]
         self.filename_array = self.metadata_df["img_filename"].values
-        
+
         self.n_classes = np.unique(self.y_array).size
         self.n_places = np.unique(self.p_array).size
 
-        self.group_array = (
-            self.y_array * self.n_places + self.p_array
-        ).astype("int")
+        self.group_array = (self.y_array * self.n_places + self.p_array).astype("int")
         self.n_groups = self.n_classes * self.n_places
         self.group_counts = (
             (
@@ -139,13 +167,32 @@ class NICO_dataset(Dataset):
         else:
             self.embeddings = None
 
-   
-    def get_group(self, idx):
+    def get_group(self, idx: int):
+        """Get the pseudo group of the image
+
+        Args:
+            idx (int): the index of the image.
+
+        Returns:
+            int: the pseudo group of the image.
+        """
         y = self.y_array[idx]
         g = (self.embeddings[idx] == 1) * self.n_classes + y
         return g
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int):
+        """Return the image, label, group, context, and pseudo group of the image (if embeddings is not None)
+
+        Args:
+            idx (int): the index of the image
+
+        Returns:
+            torch.Tensor: the image
+            int: the label of the image
+            int: the group of the image
+            int: the context of the image
+            int: the pseudo group of the image if embeddings is not None
+        """
         img_path = os.path.join(self.basedir, self.filename_array[idx])
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
